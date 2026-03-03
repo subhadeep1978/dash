@@ -1,0 +1,256 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\title{miniAV: Reactive Obstacle Navigation Using Proximity-Based State Estimation}
+\author{Subhadeep Roy}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+
+We design a reactive autonomous navigation system using three proximity sensors:
+\[
+S_k = 
+\begin{bmatrix}
+p_L \\
+p_R \\
+p_B
+\end{bmatrix}_k
+\]
+
+The system consists of:
+
+\begin{enumerate}
+    \item A constant-velocity (CV) Kalman filter estimating proximity and approach rate.
+    \item Latency-compensated prediction of future proximity.
+    \item A state-space feedback controller producing linear and angular velocity commands.
+\end{enumerate}
+
+The goal is robust obstacle avoidance without explicit geometric reconstruction.
+
+\section{1. Constant-Velocity State Estimation}
+
+For each sensor $i \in \{L, R, B\}$, define state:
+
+\[
+x_k^{(i)} =
+\begin{bmatrix}
+p_k^{(i)} \\
+\dot{p}_k^{(i)}
+\end{bmatrix}
+\]
+
+State transition (constant velocity model):
+
+\[
+x_{k+1}^{(i)} =
+\underbrace{
+\begin{bmatrix}
+1 & \Delta t \\
+0 & 1
+\end{bmatrix}
+}_{A}
+x_k^{(i)} + w_k^{(i)}
+\]
+
+Measurement model:
+
+\[
+z_k^{(i)} =
+\underbrace{
+\begin{bmatrix}
+1 & 0
+\end{bmatrix}
+}_{H}
+x_k^{(i)} + v_k^{(i)}
+\]
+
+where:
+
+\begin{itemize}
+    \item $w_k^{(i)} \sim \mathcal{N}(0, Q)$ is process noise
+    \item $v_k^{(i)} \sim \mathcal{N}(0, R)$ is measurement noise
+\end{itemize}
+
+Kalman filter recursion is applied independently to each channel.
+
+The estimator provides:
+
+\[
+\hat{p}_k^{(i)}, \quad \hat{\dot{p}}_k^{(i)}
+\]
+
+These represent smoothed proximity and estimated approach rate.
+
+\section{2. Predict-Ahead Latency Compensation}
+
+Let $\tau$ denote total control loop latency.
+
+We predict future proximity using:
+
+\[
+\hat{p}_{k+\tau}^{(i)} =
+\hat{p}_k^{(i)} + \tau \hat{\dot{p}}_k^{(i)}
+\]
+
+Define:
+
+\[
+p_L = \hat{p}_{k+\tau}^{(L)}, \quad
+p_R = \hat{p}_{k+\tau}^{(R)}, \quad
+p_B = \hat{p}_{k+\tau}^{(B)}
+\]
+
+Forward symmetric and differential components:
+
+\[
+p_{\text{sym}} = \frac{p_L + p_R}{2}
+\]
+
+\[
+p_{\text{diff}} = p_R - p_L
+\]
+
+\[
+p_{\max} = \max(p_L, p_R)
+\]
+
+These predicted values are used for control.
+
+\section{3. State-Space Control Law}
+
+Define control input:
+
+\[
+u_k =
+\begin{bmatrix}
+v_k \\
+\omega_k
+\end{bmatrix}
+\]
+
+where:
+\begin{itemize}
+    \item $v_k$ = linear velocity
+    \item $\omega_k$ = angular velocity
+\end{itemize}
+
+\subsection*{Forward Velocity Law}
+
+\[
+v_k =
+v_{\min} +
+(v_{\max} - v_{\min})
+\cdot
+\text{clip}
+\left(
+1 - \frac{p_{\text{sym}}}{T_{\text{slow}}},
+0, 1
+\right)
+\]
+
+\subsection*{Steering Law}
+
+\[
+\omega_k = k_\omega \cdot p_{\text{diff}}
+\]
+
+\subsection*{Panic Reflex}
+
+If:
+
+\[
+p_{\max} > T_{\text{panic}}
+\]
+
+then override:
+
+\[
+v_k = -v_{\text{escape}}
+\]
+\[
+\omega_k = 
+\begin{cases}
++\omega_{\text{escape}}, & p_L > p_R \\
+-\omega_{\text{escape}}, & p_R > p_L
+\end{cases}
+\]
+
+\subsection*{Rate Limiting}
+
+To prevent oscillation:
+
+\[
+u_k = u_{k-1} + \text{clip}(u_k^\ast - u_{k-1}, -\Delta u_{\max}, \Delta u_{\max})
+\]
+
+where $u_k^\ast$ is raw command.
+
+\section{4. Calibration Plan}
+
+\subsection*{4.1 Sensor Noise Estimation}
+
+Place robot stationary facing open space.
+
+Collect samples:
+
+\[
+p_k^{(i)}
+\]
+
+Compute variance:
+
+\[
+R^{(i)} = \text{Var}(p_k^{(i)})
+\]
+
+\subsection*{4.2 Process Noise Tuning}
+
+Drive robot at constant speed toward wall.
+
+Adjust $Q$ such that:
+
+\begin{itemize}
+    \item $\hat{p}_k$ tracks smoothly
+    \item $\hat{\dot{p}}_k$ responds quickly to approach
+\end{itemize}
+
+\subsection*{4.3 Threshold Selection}
+
+\begin{itemize}
+    \item $T_{\text{slow}}$: proximity at which slowdown begins.
+    \item $T_{\text{panic}}$: proximity corresponding to collision risk.
+\end{itemize}
+
+These are empirically selected by measuring readings at known distances.
+
+\subsection*{4.4 Latency Measurement}
+
+Log timestamps of:
+
+\begin{itemize}
+    \item Command transmission
+    \item Sensor notification reception
+\end{itemize}
+
+Estimate mean round-trip delay $\tau$ and use in prediction step.
+
+\section{Conclusion}
+
+The miniAV system combines:
+
+\begin{itemize}
+    \item Linear Kalman filtering of proximity signals,
+    \item Short-horizon prediction for latency compensation,
+    \item Nonlinear feedback control with safety overrides.
+\end{itemize}
+
+This avoids explicit geometric reconstruction while enabling stable
+autonomous navigation in cluttered indoor environments.
+
+\end{document}
