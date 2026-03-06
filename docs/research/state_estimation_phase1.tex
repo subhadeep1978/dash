@@ -2,6 +2,7 @@
 \documentclass[11pt]{article}
 \usepackage{amsmath,amssymb,geometry,booktabs,graphicx}
 \usepackage{tikz}
+\usepackage{mathtools}
 \geometry{margin=1in}
 
 \title{Five-State Estimation Model for a Differential Drive Robot}
@@ -18,7 +19,7 @@ autonomous vehicle (AV) estimation stack using a differential-drive robot.
 Wheel encoder measurements are streamed to a host computer which runs an
 Extended Kalman Filter (EKF) to estimate the robot state.
 
-The estimator operates in discrete time with timestep $\Delta t$.
+The estimator operates in discrete time with timestep $\Delta t$ (seconds).
 
 \section*{State Vector}
 
@@ -42,7 +43,7 @@ State & Description & Units \\
 $p_x$ & Position in world $x$ direction & meters \\
 $p_y$ & Position in world $y$ direction & meters \\
 $\theta$ & Heading (yaw) angle & radians \\
-$v$ & Forward velocity & m/s \\
+$v$ & Forward (body) velocity & m/s \\
 $\omega$ & Yaw rate & rad/s \\
 \bottomrule
 \end{tabular}
@@ -62,142 +63,272 @@ $\omega$ & Yaw rate & rad/s \\
 \end{tikzpicture}
 \end{center}
 
-$b$ = distance between wheel contact points (meters).
+$b$ = distance between the left and right wheel \emph{contact points} (meters).
 
-\section*{Encoder Measurements}
+\section*{Encoder Measurements and Wheel Displacements}
 
-Wheel encoders provide integer tick counts. Let
-
+Wheel encoders provide integer tick counts. Let $n_{L,k}, n_{R,k}$ be cumulative tick counts at timestep $k$.
+The tick increments are
 \begin{equation}
-n_{L,k},\; n_{R,k}
+\Delta n_{L,k}=n_{L,k}-n_{L,k-1}, \qquad \Delta n_{R,k}=n_{R,k}-n_{R,k-1}.
 \end{equation}
 
-be cumulative tick counts at timestep $k$. The tick increments are
+Define calibration parameters:
+\begin{itemize}
+\item $N$ = encoder ticks per wheel revolution (ticks/rev)
+\item $R$ = wheel radius (meters)
+\item $b$ = wheel baseline (meters)
+\end{itemize}
 
+The wheel arc-length traveled during timestep $k$ is
 \begin{equation}
-\Delta n_{L,k}=n_{L,k}-n_{L,k-1}
+\Delta s_{L,k} = \alpha\,\Delta n_{L,k}, \qquad \Delta s_{R,k} = \alpha\,\Delta n_{R,k},
+\end{equation}
+where the meters-per-tick scale factor is
+\begin{equation}
+\alpha \triangleq \frac{2\pi R}{N} \quad [\text{meters/tick}].
 \end{equation}
 
-\begin{equation}
-\Delta n_{R,k}=n_{R,k}-n_{R,k-1}
-\end{equation}
+\section*{From Wheel Displacements to Encoder-Derived Velocity Measurements}
 
-Wheel displacements are computed as
-
-\begin{equation}
-\Delta s_{L,k} = \frac{2\pi R}{N}\Delta n_{L,k}
-\end{equation}
-
-\begin{equation}
-\Delta s_{R,k} = \frac{2\pi R}{N}\Delta n_{R,k}
-\end{equation}
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-Parameter & Description & Units \\
-\midrule
-$R$ & Wheel radius & meters \\
-$N$ & Encoder ticks per revolution & ticks/rev \\
-$b$ & Wheel baseline & meters \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\section*{Velocity Computation}
-
+Given $\Delta s_{L,k}, \Delta s_{R,k}$ over timestep $\Delta t$,
 \begin{align}
-v_{enc} &= \frac{\Delta s_R + \Delta s_L}{2\Delta t} \\
-\omega_{enc} &= \frac{\Delta s_R - \Delta s_L}{b\Delta t}
+v_{enc,k} &= \frac{\Delta s_{R,k} + \Delta s_{L,k}}{2\Delta t} \qquad [\text{m/s}] \\
+\omega_{enc,k} &= \frac{\Delta s_{R,k} - \Delta s_{L,k}}{b\,\Delta t} \qquad [\text{rad/s}].
 \end{align}
 
-Measurement vector
-
+Define the measurement vector
 \begin{equation}
 z_k =
 \begin{bmatrix}
-v_{enc} \\
-\omega_{enc}
+v_{enc,k} \\
+\omega_{enc,k}
 \end{bmatrix}
-\in \mathbb{R}^{2}
+\in \mathbb{R}^{2}.
 \end{equation}
 
-\section*{Process Dynamics}
+\section*{Continuous-Time Model (Unicycle Kinematics)}
 
+A clean starting point is the continuous-time stochastic differential equation
+\begin{equation}
+\dot{x}(t) = f(x(t)) + G\,w(t),
+\end{equation}
+with
+\begin{equation}
+f(x)=
+\begin{bmatrix}
+v\cos\theta \\
+v\sin\theta \\
+\omega \\
+0 \\
+0
+\end{bmatrix},
+\qquad
+G =
+\begin{bmatrix}
+0 & 0\\
+0 & 0\\
+0 & 0\\
+1 & 0\\
+0 & 1
+\end{bmatrix}
+\in \mathbb{R}^{5\times 2}.
+\end{equation}
+
+Here $w(t)\in\mathbb{R}^2$ models \emph{white} acceleration-like disturbances on $(v,\omega)$:
+\begin{equation}
+w(t) \sim \mathcal{N}(0,Q_c), \qquad Q_c \in \mathbb{R}^{2\times 2},
+\end{equation}
+often chosen diagonal,
+\begin{equation}
+Q_c = \mathrm{diag}(q_v, q_\omega),
+\end{equation}
+where $q_v$ has units $(\text{m/s}^2)^2$ and $q_\omega$ has units $(\text{rad/s}^2)^2$ under the white-noise convention.
+
+\section*{Discretization of the Continuous-Time Model}
+
+Assume $v$ and $\omega$ are approximately constant over the interval $[t_k,t_{k+1}]$ of length $\Delta t$.
+A more accurate discretization than naive Euler is the \emph{closed-form unicycle integration}.
+
+Let $\theta_k$ be the heading at time $t_k$.
+\begin{itemize}
+\item If $|\omega_k| > \varepsilon$ (non-negligible turn rate),
+\begin{align}
+p_{x,k+1} &= p_{x,k} + \frac{v_k}{\omega_k}\Big(\sin(\theta_k+\omega_k\Delta t)-\sin(\theta_k)\Big) \\
+p_{y,k+1} &= p_{y,k} - \frac{v_k}{\omega_k}\Big(\cos(\theta_k+\omega_k\Delta t)-\cos(\theta_k)\Big) \\
+\theta_{k+1} &= \theta_k + \omega_k\Delta t \\
+v_{k+1} &= v_k \\
+\omega_{k+1} &= \omega_k
+\end{align}
+\item If $|\omega_k| \le \varepsilon$ (approximately straight),
 \begin{align}
 p_{x,k+1} &= p_{x,k} + v_k\cos(\theta_k)\Delta t \\
 p_{y,k+1} &= p_{y,k} + v_k\sin(\theta_k)\Delta t \\
 \theta_{k+1} &= \theta_k + \omega_k\Delta t \\
-v_{k+1} &= v_k + w_v \\
-\omega_{k+1} &= \omega_k + w_\omega
+v_{k+1} &= v_k \\
+\omega_{k+1} &= \omega_k.
 \end{align}
+\end{itemize}
 
-Compact form
-
+This yields the discrete-time transition
 \begin{equation}
-x_{k+1} = f(x_k) + w_k
+x_{k+1} = f_d(x_k) + w_{d,k},
+\qquad x_k\in\mathbb{R}^5.
 \end{equation}
 
-\section*{Process Noise}
+\subsection*{Discrete-Time Process Noise Scaling}
 
+From the continuous-time model $\dot{x}=f(x)+G w(t)$, the discrete-time noise covariance for small $\Delta t$ is
 \begin{equation}
-w_k =
+Q_d \approx G\,Q_c\,G^\top\,\Delta t
+\qquad \in \mathbb{R}^{5\times 5}.
+\end{equation}
+
+If $Q_c=\mathrm{diag}(q_v,q_\omega)$, then
+\begin{equation}
+Q_d \approx
 \begin{bmatrix}
-0 \\
-0 \\
-0 \\
-w_v \\
-w_\omega
-\end{bmatrix}
-\in \mathbb{R}^{5}
+0&0&0&0&0\\
+0&0&0&0&0\\
+0&0&0&0&0\\
+0&0&0&q_v\Delta t&0\\
+0&0&0&0&q_\omega\Delta t
+\end{bmatrix}.
 \end{equation}
 
-\begin{equation}
-w_k \sim \mathcal{N}(0,Q)
-\end{equation}
-
-\begin{equation}
-Q \in \mathbb{R}^{5\times5}
-\end{equation}
+(Interpretation: uncertainty in $v$ and $\omega$ grows with time, and then propagates into $(p_x,p_y,\theta)$ through the nonlinear dynamics during EKF covariance propagation.)
 
 \section*{Measurement Model}
 
+We treat encoder-derived velocity estimates as measurements of the state components $(v,\omega)$:
 \begin{equation}
-z_k = Hx_k + n_k
-\end{equation}
-
-\begin{equation}
-H =
+z_k = h(x_k) + n_k,
+\qquad
+h(x_k)=
 \begin{bmatrix}
-0 &0 &0 &1 &0 \\
-0 &0 &0 &0 &1
-\end{bmatrix}
-\in \mathbb{R}^{2\times5}
+v_k\\
+\omega_k
+\end{bmatrix}.
 \end{equation}
 
+The measurement Jacobian is constant:
 \begin{equation}
-n_k \sim \mathcal{N}(0,R), \quad R\in\mathbb{R}^{2\times2}
+H \triangleq \frac{\partial h}{\partial x} =
+\begin{bmatrix}
+0 & 0 & 0 & 1 & 0\\
+0 & 0 & 0 & 0 & 1
+\end{bmatrix}
+\in \mathbb{R}^{2\times 5}.
 \end{equation}
 
-\section*{EKF Prediction and Update}
+\section*{Correlated Measurement Noise Covariance $R$ Induced by Wheel Noise}
+
+Although $\Delta s_{L}$ and $\Delta s_{R}$ may have \emph{independent} measurement noise, the derived quantities
+$v_{enc}$ and $\omega_{enc}$ are coupled functions of $(\Delta s_L,\Delta s_R)$, so the measurement noise covariance
+\begin{equation}
+R = \mathrm{Cov}(n_k) \in \mathbb{R}^{2\times2}
+\end{equation}
+generally has off-diagonal terms.
+
+Assume wheel displacement measurement errors are independent:
+\begin{equation}
+\tilde{\Delta s}_L = \Delta s_L + e_L,\qquad \tilde{\Delta s}_R = \Delta s_R + e_R,
+\end{equation}
+with
+\begin{equation}
+\begin{bmatrix}e_L\\e_R\end{bmatrix}\sim\mathcal{N}\!\left(0,\Sigma_s\right),
+\qquad
+\Sigma_s=\mathrm{diag}(\sigma_L^2,\sigma_R^2)\in\mathbb{R}^{2\times2},
+\end{equation}
+where $\sigma_L^2,\sigma_R^2$ have units $\text{m}^2$.
+
+Define the linear mapping from wheel displacements to measurements:
+\begin{equation}
+\begin{bmatrix}
+v_{enc}\\
+\omega_{enc}
+\end{bmatrix}
+=
+A
+\begin{bmatrix}
+\Delta s_L\\
+\Delta s_R
+\end{bmatrix},
+\qquad
+A =
+\begin{bmatrix}
+\frac{1}{2\Delta t} & \frac{1}{2\Delta t}\\
+-\frac{1}{b\Delta t} & \frac{1}{b\Delta t}
+\end{bmatrix}
+\in\mathbb{R}^{2\times 2}.
+\end{equation}
+
+Then the induced measurement covariance is
+\begin{equation}
+\boxed{R = A\,\Sigma_s\,A^\top \in \mathbb{R}^{2\times2}.}
+\end{equation}
+
+Expanding,
+\begin{equation}
+R =
+\begin{bmatrix}
+\frac{\sigma_L^2+\sigma_R^2}{4\Delta t^2} & \frac{\sigma_R^2-\sigma_L^2}{2b\Delta t^2}\\[6pt]
+\frac{\sigma_R^2-\sigma_L^2}{2b\Delta t^2} & \frac{\sigma_L^2+\sigma_R^2}{b^2\Delta t^2}
+\end{bmatrix}.
+\end{equation}
+
+Key points:
+\begin{itemize}
+\item $R_{12}$ depends on wheel noise \emph{asymmetry} $(\sigma_R^2-\sigma_L^2)$ and is scaled by $1/(b\Delta t^2)$.
+\item Even if the tick-noise is symmetric, additional effects (wheel slip, unequal wheel radius, unmodeled actuator dynamics)
+often make $\sigma_L^2\neq\sigma_R^2$ in practice, yielding nonzero correlation in $(v_{enc},\omega_{enc})$.
+\item Calibration parameters enter through $\Delta s=\alpha\Delta n$ (via $\alpha=2\pi R/N$) and through $b$.
+\end{itemize}
+
+\subsection*{If the noise is specified in ticks}
+
+If the encoder tick increments have independent noise
+\begin{equation}
+\begin{bmatrix}e_{n,L}\\e_{n,R}\end{bmatrix}\sim\mathcal{N}(0,\Sigma_n),\qquad \Sigma_n=\mathrm{diag}(\sigma_{n,L}^2,\sigma_{n,R}^2),
+\end{equation}
+with units $\text{ticks}^2$, then displacement noise variances are
+\begin{equation}
+\sigma_L^2 = \alpha^2\sigma_{n,L}^2,\qquad \sigma_R^2 = \alpha^2\sigma_{n,R}^2,
+\end{equation}
+and $R$ is still $A\Sigma_sA^\top$ with $\Sigma_s=\alpha^2\Sigma_n$.
+Thus \emph{both} $R$ and its off-diagonals depend explicitly on $(R,N,b)$.
+
+\section*{EKF Prediction and Update (Dimensions Included)}
 
 Prediction:
-
 \begin{align}
-\hat{x}_{k|k-1} &= f(\hat{x}_{k-1|k-1}) \\
-P_{k|k-1} &= F_kP_{k-1|k-1}F_k^T + Q
+\hat{x}_{k|k-1} &= f_d(\hat{x}_{k-1|k-1}) \qquad (\hat{x}\in\mathbb{R}^5)\\
+P_{k|k-1} &= F_k P_{k-1|k-1} F_k^\top + Q_d \qquad (P\in\mathbb{R}^{5\times5})
 \end{align}
+where
+\begin{equation}
+F_k \triangleq \left.\frac{\partial f_d}{\partial x}\right|_{\hat{x}_{k-1|k-1}} \in \mathbb{R}^{5\times 5}.
+\end{equation}
 
 Update:
-
 \begin{align}
-K_k &= P_{k|k-1}H^T(H P_{k|k-1}H^T + R)^{-1} \\
-\hat{x}_{k|k} &= \hat{x}_{k|k-1} + K_k(z_k - H\hat{x}_{k|k-1}) \\
-P_{k|k} &= (I-K_kH)P_{k|k-1}
+S_k &= H P_{k|k-1} H^\top + R \qquad (S\in\mathbb{R}^{2\times2})\\
+K_k &= P_{k|k-1} H^\top S_k^{-1} \qquad (K\in\mathbb{R}^{5\times2})\\
+\hat{x}_{k|k} &= \hat{x}_{k|k-1} + K_k\Big(z_k - h(\hat{x}_{k|k-1})\Big) \qquad (\hat{x}\in\mathbb{R}^5)\\
+P_{k|k} &= (I - K_k H) P_{k|k-1} \qquad (P\in\mathbb{R}^{5\times5}).
 \end{align}
 
-\section*{Jacobian of Process Model}
+\section*{Example Jacobian (Euler Discretization)}
 
+If you use the straight-motion Euler discretization
+\begin{align*}
+p_{x,k+1} &= p_{x,k} + v_k\cos(\theta_k)\Delta t,\\
+p_{y,k+1} &= p_{y,k} + v_k\sin(\theta_k)\Delta t,\\
+\theta_{k+1} &= \theta_k + \omega_k\Delta t,\\
+v_{k+1} &= v_k,\\
+\omega_{k+1} &= \omega_k,
+\end{align*}
+then an EKF Jacobian is
 \begin{equation}
 F_k =
 \begin{bmatrix}
@@ -207,45 +338,83 @@ F_k =
 0 &0 &0 &1 &0 \\
 0 &0 &0 &0 &1
 \end{bmatrix}
-\in \mathbb{R}^{5\times5}
+\in \mathbb{R}^{5\times5}.
 \end{equation}
+
+(For the closed-form unicycle discretization, $F_k$ is still analytic but slightly longer; many implementations compute it symbolically or via automatic differentiation.)
 
 \section*{Calibration of Robot Parameters}
 
-Three parameters must be calibrated.
+Three parameters must be calibrated: $N$, $R$, and $b$.
 
-\subsection*{Wheel Radius $R$}
+\subsection*{(1) Encoder Resolution $N$ [ticks/rev]}
 
-Drive the robot forward a known distance $D$ and record total encoder ticks $\Delta n$.
-
+Rotate a wheel \emph{one full revolution} (mark the wheel) and count ticks.
+Repeat $M$ times and average to reduce quantization error:
 \begin{equation}
-R = \frac{DN}{2\pi\Delta n}
+\hat{N} = \frac{1}{M}\sum_{i=1}^{M} N_i.
 \end{equation}
 
-\subsection*{Ticks Per Revolution $N$}
+\subsection*{(2) Wheel Radius $R$ [meters]}
 
-Rotate a wheel manually and count encoder ticks for one full revolution.
-
-\subsection*{Wheel Baseline $b$}
-
-Command the robot to rotate in place $k$ full turns and record wheel travel.
-
+Drive the robot straight a known distance $D$ (meters) on a surface with good traction.
+Record total tick change for one wheel (or average both):
 \begin{equation}
-b = \frac{\Delta s_R - \Delta s_L}{2\pi k}
+\Delta n \triangleq \frac{\Delta n_L + \Delta n_R}{2}.
+\end{equation}
+Then
+\begin{equation}
+\hat{R} = \frac{D\,\hat{N}}{2\pi\,\Delta n}.
+\end{equation}
+
+Practical notes: repeat multiple trials at different distances (e.g., $D=0.5$--$2$ m) and average $\hat{R}$.
+
+\subsection*{(3) Wheel Baseline $b$ [meters]}
+
+Command the robot to rotate in place by $k$ full turns ($k\ge 2$ to average out noise).
+Record total wheel displacements $\Delta s_L,\Delta s_R$ over the maneuver.
+For an in-place turn, the wheels travel arcs of length $\pi b$ per full turn in opposite directions, so
+\begin{equation}
+\Delta s_R - \Delta s_L \approx 2\pi k\,b.
+\end{equation}
+Thus estimate
+\begin{equation}
+\hat{b} = \frac{\Delta s_R - \Delta s_L}{2\pi k}.
 \end{equation}
 
 \section*{Block Diagram}
 
 \begin{center}
-\begin{tikzpicture}[node distance=2cm]
+\begin{tikzpicture}[node distance=2.2cm]
 \node (robot) [draw, rectangle] {Robot};
-\node (enc) [draw, rectangle, right of=robot] {Wheel Encoders};
-\node (host) [draw, rectangle, right of=enc] {EKF Tracker};
-\node (state) [draw, rectangle, right of=host] {State Estimate};
+
+\node (enc) [draw, rectangle, right of=robot] {\shortstack{Wheel Encoders\\(ticks)}};
+\node (pre) [draw, rectangle, right of=enc]
+{\shortstack{Preprocess\\$\Delta n\to \Delta s \to (v_{enc},\omega_{enc})$}};
+
+\node (ekf) [draw, rectangle, right of=pre]
+{\shortstack{EKF\\$f_d,\,H,\,Q_d,\,R$}};
+
+\node (state) [draw, rectangle, right of=ekf]
+{\shortstack{State Estimate\\$\hat{x}=[p_x,p_y,\theta,v,\omega]^T$}};
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 \draw[->] (robot) -- (enc);
-\draw[->] (enc) -- (host);
-\draw[->] (host) -- (state);
+\draw[->] (enc) -- (pre);
+\draw[->] (pre) -- (ekf);
+\draw[->] (ekf) -- (state);
 \end{tikzpicture}
 \end{center}
 
