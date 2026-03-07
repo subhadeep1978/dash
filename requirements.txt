@@ -1,0 +1,10 @@
+# Python >=3.11
+
+bleak>=0.22,<1.0
+
+pyobjc-core>=12,<14
+pyobjc-framework-CoreBluetooth>=12,<14
+pyobjc-framework-libdispatch>=12,<14
+
+async-timeout>=4,<6
+typing-extensions>=4,<6
