@@ -52,6 +52,7 @@ from bleak import BleakClient, BleakScanner
 import phy
 import services.safety as safety
 import services.recovery as recovery
+from simulated_robot import SimulatedClient
 
 # =============================================================================
 #                           DASH BLE PROTOCOL CONSTANTS
@@ -79,6 +80,12 @@ CMD_RIGHT_EAR_COLOR   = 0x0C       # right ear (RGB)
 CMD_EYE_COLOR         = 0x08
 CMD_EAR_BUTTON_COLOR  = 0x09
 CMD_EYE_BRIGHTNESS    = 0x08       # 1 byte
+
+# SIMULATE:
+#   True  ==> If Robot is not discovered, start a fake client to flush the rest of the architecture
+#   False ==> If Robot is not discovered, throw an error
+SIMULATE = False
+
 
 # =============================================================================
 # Utilities
@@ -193,6 +200,34 @@ class DashDriver:
 
         self._notify_started = False
 
+
+    # -------------------------------------------------------------------------
+    # Discover target
+    # -------------------------------------------------------------------------
+    async def discover(self, timeout):
+        if SIMULATE: return self.name 
+
+        # Discover real robot
+        devices = await BleakScanner.discover(timeout=timeout)
+
+        target = None
+        for d in devices:
+            if (d.name or "").strip().lower() == self.name.lower():
+                target = d
+                break
+
+        return target    
+
+    # -------------------------------------------------------------------------
+    # Create a bleak client
+    # -------------------------------------------------------------------------
+    def create_client(self, target):
+        if SIMULATE:
+            self.client = SimulatedClient()
+        else:
+            self.client = BleakClient(target)
+
+
     # -------------------------------------------------------------------------
     # Connection lifecycle
     # -------------------------------------------------------------------------
@@ -216,13 +251,8 @@ class DashDriver:
         if not self.sensor_queue:
             self.sensor_queue: asyncio.Queue[ProximitySample] = asyncio.Queue(maxsize=self.sensor_queue_maxsize)            
 
-        devices = await BleakScanner.discover(timeout=timeout)
-
-        target = None
-        for d in devices:
-            if (d.name or "").strip().lower() == self.name.lower():
-                target = d
-                break
+        # Discover the target
+        target = await self.discover(timeout)
 
         if target is None:
             raise RuntimeError(
@@ -230,7 +260,9 @@ class DashDriver:
                 f"Tips: power on Dash; keep it close; quit Wonder app fully."
             )
 
-        self.client = BleakClient(target)
+        # Create a client for the target
+        self.create_client(target)
+
         await self.client.connect()
 
         # Some devices behave better if reset/enable is issued after connect.
@@ -475,8 +507,8 @@ class DashRobot:
     (they do not block the event loop).
     """
 
-    def __init__(self, driver: DashDriver, *, limits: RobotLimits = RobotLimits()) -> None:
-        self.d = driver
+    def __init__(self, name: str, *, limits: RobotLimits = RobotLimits()) -> None:
+        self.d = DashDriver(name)
         self.limits = limits
         self._phy = phy.SensorPHY(self, history_size=256)
         self._obstacle_cfg                       = safety.ObstacleConfig()
@@ -740,24 +772,87 @@ class DashRobot:
 # =============================================================================
 if __name__ == "__main__":
     
-    driver = DashDriver(name="Dash")
-    robot  = DashRobot(driver)
+    robot  = DashRobot("Dash")
 
-    async def demo_basic_motion_and_logging() -> None:
-        await robot.connect(timeout=6.0)
-        print(f"Robot found and connected")
+    # ====================================================================
+    # Basic demostration of robot motion
+    # ====================================================================
+    async def motion_demo_task(robot, stop_evt: asyncio.Event) -> None:
+        """
+        Foreground motion logic.
+        Ends when done, or exits early if stop_evt is set.
+        """
         try:
-            while not robot._stop_evt.is_set():
-                # await robot.drive_for(200, 50,"backward")
+            while not stop_evt.is_set():
+                await robot.drive_for(120, 1.0, "forward")
+                await asyncio.sleep(0.2)
 
+                await robot.drive_for(120, 1.0, "backward")
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            try:
                 await robot.stop()
-                await asyncio.sleep(0.3)
-                await robot.drive(-80, 0)
-                await asyncio.sleep(1.0)
-                await robot.stop()
+            except Exception:
+                pass
+            raise
+
+    # ====================================================================
+    # Foreground logger consuming from PHY-owned latest().
+    # ====================================================================
+    async def sensor_logger_task(robot, stop_evt: asyncio.Event, hz: float = 5.0) -> None:
+        period = 1.0 / hz
+        try:
+            while not stop_evt.is_set():
+                s = await robot.get_latest_sensor()
+                print(f"[logger] {s}")
+                await asyncio.sleep(period)
+        except asyncio.CancelledError:
+            raise
+
+    # ====================================================================
+    # Orchestrate the session
+    # ====================================================================
+    async def run_session(robot) -> None:
+        """
+        One full session:
+        1) connect
+        2) auto-start PHY + safety inside robot.connect()
+        3) run motion + logger in parallel
+        4) graceful shutdown
+        """
+        session_stop_evt = asyncio.Event()
+
+        try:
+            # T1: serial setup
+            await robot.connect(timeout=6.0)
+            print("Robot found and connected")
+
+            # T2/T3: background services are assumed to be started inside robot.connect()
+            # e.g. PHY task and safety task launched by robot._start_guardrails()
+            # If additional background tasks are needed:
+            #   asyncio.create_task( BG() )
+
+            # T4/T5: foreground tasks in parallel
+            await asyncio.gather(
+                # motion_demo_task(robot, session_stop_evt),
+                sensor_logger_task(robot, session_stop_evt, hz=5.0),
+            )
+
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt received")
+            session_stop_evt.set()
+            raise
 
         finally:
+            # T6: graceful shutdown
+            session_stop_evt.set()
+            try:
+                await robot.stop()
+            except Exception:
+                pass
             await robot.close()
+            print("Robot closed cleanly")
 
 
-    asyncio.run(demo_basic_motion_and_logging())
+    # Launch
+    asyncio.run(run_session(robot))
