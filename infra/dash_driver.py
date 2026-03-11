@@ -49,10 +49,10 @@ from collections import deque
 import matplotlib.colors as mcolors
 from bleak import BleakClient, BleakScanner
 
-import phy
-import services.safety as safety
-import services.recovery as recovery
-from simulated_robot import SimulatedClient
+import infra.phy as phy
+import infra.services.safety as safety
+import infra.services.recovery as recovery
+from infra.simulated_robot import SimulatedClient
 
 # =============================================================================
 #                           DASH BLE PROTOCOL CONSTANTS
@@ -84,7 +84,7 @@ CMD_EYE_BRIGHTNESS    = 0x08       # 1 byte
 # SIMULATE:
 #   True  ==> If Robot is not discovered, start a fake client to flush the rest of the architecture
 #   False ==> If Robot is not discovered, throw an error
-SIMULATE = False
+SIMULATE = True
 
 
 # =============================================================================
@@ -361,16 +361,19 @@ class DashDriver:
             left = b[7]
             rear = b[8]
 
-        sample = ProximitySample(t=t, left=left, right=right, rear=rear, raw=b)
+        sample = ProximitySample(t=t, left=left, right=right, rear=rear, raw=list(b))
         self._history.append(sample)
 
         # Non-blocking enqueue; drop if consumer is slow.
         if self.sensor_queue:
             try:
                 self.sensor_queue.put_nowait(sample)
-            except asyncio.QueueFull:
+            except asyncio.QueueFull:                
                 pass
 
+    # -------------------------------------------------------------------------
+    # normalize the colors to 8 bit RGB
+    # -------------------------------------------------------------------------
     def normalize_colors(self, r,g,b): 
         return int(max(0, min(255, r))), int(max(0, min(255, g))), int(max(0, min(255, b)))
 
@@ -557,7 +560,7 @@ class DashRobot:
             self._stop_evt = asyncio.Event()
 
         await self.d.scan_and_connect(timeout=timeout)
-        # self._start_guardrails()
+        self._start_guardrails()
 
     async def close(self) -> None:
         """
@@ -707,20 +710,33 @@ class DashRobot:
 
     async def light_show(self):
         # Blinky ear    
-        await robot.ear("green", "blue")
+        await self.ear("green", "blue")
         await asyncio.sleep(0.2)
-        await robot.ear("blue", "green")
+        await self.ear("blue", "green")
         await asyncio.sleep(0.2)
 
         # Blinky head
-        await robot.head("yellow")
+        await self.head("yellow")
         await asyncio.sleep(0.2)
-        await robot.head("purple")
+        await self.head("purple")
         
         # Turn off neck and eye
         await asyncio.sleep(0.2)
-        await robot.neck("black")
-        await robot.eye("off")
+        await self.neck("black")
+        await self.eye("off")
+
+    async def lights_off(self):
+        await self.ear("black", "black")
+        await asyncio.sleep(0.2)
+
+        # Blinky head
+        await self.head("black")
+        await asyncio.sleep(0.2)
+        
+        # Turn off neck and eye
+        await asyncio.sleep(0.2)
+        await self.neck("black")
+
 
     # -------------------------------------------------------------------------
     # Sensors
@@ -746,26 +762,6 @@ class DashRobot:
             return await asyncio.wait_for(self.d.sensor_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
-
-    async def get_latest_sensor(self) -> Optional[ProximitySample]:
-        """
-        get_latest_sensor
-
-        Non-blocking fetch of the most recent sample currently available in the queue.
-        If multiple samples are queued, it drains to the most recent and returns that.
-
-        Returns
-        -------
-        ProximitySample | None
-        """
-        latest: Optional[ProximitySample] = None
-        while True:
-            try:
-                latest = self.d.sensor_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        return latest
-
 
 # =============================================================================
 #                                 EXAMPLE USAGE

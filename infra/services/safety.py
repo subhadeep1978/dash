@@ -34,7 +34,7 @@ async def stop_on_obstacle(
             right = getattr(s, "right", 0.0)
             rear = getattr(s, "rear", 0.0)
 
-            print(f"left={left}, right={right}, rear={rear}")
+            # print(f"left={left}, right={right}, rear={rear}")
 
             too_close = (
                 (left is not None and left >= cfg.left_thresh) or
