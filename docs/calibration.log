@@ -4,5 +4,5 @@ Right proximity    : Byte 6
 Right proximity    : Byte 7
 Rear  proximity    : Byte 8
 
-Right wheel Tick   : Byte ?
-Left wheel Tick    : Byte ?
+Right wheel Tick   : Byte 10
+Left wheel Tick    : Byte 11

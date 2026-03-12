@@ -84,7 +84,7 @@ CMD_EYE_BRIGHTNESS    = 0x08       # 1 byte
 # SIMULATE:
 #   True  ==> If Robot is not discovered, start a fake client to flush the rest of the architecture
 #   False ==> If Robot is not discovered, throw an error
-SIMULATE = True
+SIMULATE = False
 
 
 # =============================================================================

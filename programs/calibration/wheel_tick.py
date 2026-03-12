@@ -16,8 +16,10 @@ import matplotlib.pyplot as plt
 # =========================================================================
 timestamp = datetime.now().strftime("%Y.%m.%d_%H.%M.%S")
 
-num_seconds = 2 * 60
-logfile = os.path.join("logs", "accelerometer", timestamp, "gravity_sphere_test.csv")
+num_seconds = 60
+# logfile = os.path.join("logs", "wheel_tick", timestamp, "right.csv")
+logfile = os.path.join("logs", "wheel_tick", "left_backward.csv")
+
 
 # Robot runs this program
 def getRobotPrograms(robot):

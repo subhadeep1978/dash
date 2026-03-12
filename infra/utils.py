@@ -49,6 +49,7 @@ class Calibrator:
         logfile2.parent.mkdir(exist_ok=True, parents=True)
         self.outfile = open(logfile2, "w")
         self.writer  = csv.writer(self.outfile)
+        self.writer.writerow(["time"] + list(range(20)) )
 
     # Calibrate.
     # Samples the robot for raw sensor data while the user
